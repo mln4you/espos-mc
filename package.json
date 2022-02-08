@@ -1,20 +1,20 @@
 {
-  "name": "escpos",
-  "version": "3.0.0-alpha.6",
-  "description": "ESC/POS Printer driver for nodejs",
+  "name": "escpos-mc",
+  "version": "1.0.0",
+  "description": "My temp ESC/POS Printer driver for nodejs",
   "main": "index.js",
   "scripts": {
     "test": "mocha"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/song940/node-escpos.git"
+    "url": "git+https://github.com/mln4you/espos-mc.git"
   },
   "keywords": [
     "escpos",
     "printer"
   ],
-  "author": "Lsong <hi@lsong.org> (https://lsong.org)",
+  "author": "Forked from Lsong <hi@lsong.org> (https://lsong.org)",
   "contributors": [
     "Jose Vera <hola@jose.com.co>",
     "Sébastien Vidal <Psychopoulet@GitHub.com>",
@@ -25,9 +25,9 @@
   ],
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/song940/node-escpos/issues"
+    "url": "https://github.com/mln4you/espos-mc/issues"
   },
-  "homepage": "https://github.com/song940/node-escpos#readme",
+  "homepage": "https://github.com/mln4you/espos-mc#readme",
   "dependencies": {
     "get-pixels": "*",
     "iconv-lite": "*",
