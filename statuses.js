@@ -307,9 +307,107 @@ class RollPaperSensorStatus extends DeviceStatus {
   }
 }
 
+class ExternalSensorStatus extends DeviceStatus {
+  static commands() {
+    return [_.DLE, _.EOT, String.fromCharCode(5)];
+  }
+
+  static getClassName() {
+    return 'ExternalSensorStatus';
+  }
+
+  toJSON() {
+    let result = super.toJSON();
+
+    for (let i = 0; i < 8; i++) {
+      let label = '';
+      let status = 'ok';
+      switch (i) {
+        case 0:
+          if (this.bitsAsc[i] === 1) {
+            status = 'error';
+            label = 'Paper blocked';
+          } else {
+            label = 'Paper blocking detection sensor is normal';
+          }
+          break;
+        case 1:
+          if (this.bitsAsc[i] === 1) {
+            status = 'error';
+            label = 'Happened retracting ticket or clear data';
+          } else {
+            label = 'No operation';
+          }
+          break;
+        case 2:
+          if (this.bitsAsc[i] === 1) {
+            status = 'error';
+            label = 'Ticket held on printer bezel';
+          } else {
+            label = 'No ticket held on printer bezel or this function invalid';
+          }
+          break;
+        case 3:
+          if (this.bitsAsc[i] === 1) {
+            status = 'error';
+            label = 'Paper jam';
+          } else {
+            label = 'External sensor is normal';
+          }
+          break;
+        // case 4:
+        //   if (this.bitsAsc[i] === 1) {
+        //     status = 'error';
+        //     label = 'No used. Fixed to On';
+        //   } else {
+        //     label = 'No error';
+        //   }
+        //   break;
+        case 5:
+          if (this.bitsAsc[i] === 1) {
+            status = 'error';
+            label = 'Blackmark sensor error';
+          } else {
+            label = 'Blackmark sensor is normal';
+          }
+          break;
+        case 6:
+          if (this.bitsAsc[i] === 1) {
+            status = 'error';
+            label = 'Paper error 6';
+          } else {
+            label = 'No error';
+          }
+          break;
+          case 7:
+            if (this.bitsAsc[i] === 1) {
+              status = 'error';
+              label = 'No used. Fixed to Off';
+            } else {
+              label = 'No error';
+            }
+            break;
+        default:
+          label = 'Fixed';
+          break;
+      }
+
+      result.statuses.push({
+        bit: i,
+        value: this.bitsAsc[i],
+        label: label,
+        status: status
+      });
+    }
+
+     return result;
+  }
+}
+
 module.exports = {
   PrinterStatus: PrinterStatus,
   OfflineCauseStatus: OfflineCauseStatus,
   ErrorCauseStatus: ErrorCauseStatus,
   RollPaperSensorStatus: RollPaperSensorStatus,
+  ExternalSensorStatus: ExternalSensorStatus
 };

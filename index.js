@@ -10,7 +10,7 @@ const utils = require('./utils');
 const _ = require('./commands');
 const Promiseify = require('./promisify');
 const statuses = require('./statuses');
-const {PrinterStatus,OfflineCauseStatus,ErrorCauseStatus,RollPaperSensorStatus} = statuses;
+const {PrinterStatus,OfflineCauseStatus,ErrorCauseStatus,RollPaperSensorStatus, ExternalSensorStatus} = statuses;
 
 /**
  * [function ESC/POS Printer]
@@ -900,6 +900,7 @@ Printer.prototype.raw = function raw(data) {
  */
 Printer.prototype.getStatuses = function(callback) {
   let buffer = [];
+  
   this.adapter.read(data => {
     for (let i = 0; i < data.byteLength; i++) {
       buffer.push(data.readInt8(i));
@@ -910,7 +911,7 @@ Printer.prototype.getStatuses = function(callback) {
     }
 
     let statuses = [];
-    for (let i = 0; i < buffer.length; i++) {
+    for (let i = 0; i <= buffer.length; i++) {
       let byte = buffer[i];
       switch (i) {
         case 0:
@@ -924,6 +925,9 @@ Printer.prototype.getStatuses = function(callback) {
           break;
         case 3  :
           statuses.push(new ErrorCauseStatus(byte));
+          break;
+        case 4  :
+          statuses.push(new ExternalSensorStatus(byte));
           break;
       }
     }
@@ -945,6 +949,10 @@ Printer.prototype.getStatuses = function(callback) {
   });
 
   ErrorCauseStatus.commands().forEach((c) => {
+    this.adapter.write(c);
+  });
+
+  ExternalSensorStatus.commands().forEach((c) => {
     this.adapter.write(c);
   });
 
