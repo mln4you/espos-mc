@@ -331,14 +331,14 @@ class ExternalSensorStatus extends DeviceStatus {
             label = 'Paper blocking detection sensor is normal';
           }
           break;
-        case 1:
-          if (this.bitsAsc[i] === 1) {
-            status = 'error';
-            label = 'Happened retracting ticket or clear data';
-          } else {
-            label = 'No operation';
-          }
-          break;
+        // case 1:
+        //   if (this.bitsAsc[i] === 1) {
+        //     status = 'error';
+        //     label = 'Happened retracting ticket or clear data';
+        //   } else {
+        //     label = 'No operation';
+        //   }
+        //   break;
         case 2:
           if (this.bitsAsc[i] === 1) {
             status = 'error';
