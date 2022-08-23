@@ -959,6 +959,50 @@ Printer.prototype.getStatuses = function(callback) {
   return this;
 }
 
+/**
+ * get custom statuses from the printer
+ * @param  {Function} callback
+ * @return {Printer}
+ */
+ Printer.prototype.getCustomStatuses = function(callback) {
+  let buffer = [];
+  
+  this.adapter.read(data => {
+    for (let i = 0; i < data.byteLength; i++) {
+      buffer.push(data.readInt8(i));
+    }
+
+    if (buffer.length < 2) {
+      return;
+    }
+
+    let statuses = [];
+
+    for (let i = 0; i <= buffer.length; i++) {
+      let byte = buffer[i];
+      switch (i) {
+        case 0:
+          statuses.push(new RollPaperSensorStatus(byte));
+          break;
+        case 1:
+          statuses.push(new ExternalSensorStatus(byte));
+          break;
+      }}
+
+    buffer = [];
+    callback(statuses);
+  })
+
+  RollPaperSensorStatus.commands().forEach((c) => {
+    this.adapter.write(c);
+  });
+
+  ExternalSensorStatus.commands().forEach((c) => {
+    this.adapter.write(c);
+  });
+
+  return this;
+}
 
 /**
  * Printer Supports
