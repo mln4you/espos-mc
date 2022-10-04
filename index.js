@@ -107,6 +107,7 @@ Printer.prototype.marginRight = function (size) {
  * @return {[Printer]} printer  [the escpos printer instance]
  */
 Printer.prototype.print = function (content) {
+  console.log("PRINT_DEBUG", "PRINT_TO_BUFFER", content);
   this.buffer.write(content);
   return this;
 };
