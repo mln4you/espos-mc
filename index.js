@@ -117,7 +117,6 @@ Printer.prototype.print = function (content) {
   dontCheckTimeout = setTimeout(() => {
     dontCheckStatus = false;
     clearTimeout(dontCheckTimeout);
-    console.log("CLEARED TIMEOUT");
   },50000);
 
   return this;
