@@ -12,6 +12,8 @@ const Promiseify = require('./promisify');
 const statuses = require('./statuses');
 const {PrinterStatus,OfflineCauseStatus,ErrorCauseStatus,RollPaperSensorStatus, ExternalSensorStatus} = statuses;
 
+var dontCheckStatus = false;
+
 /**
  * [function ESC/POS Printer]
  * @param  {[Adapter]} adapter [eg: usb, network, or serialport]
@@ -107,8 +109,13 @@ Printer.prototype.marginRight = function (size) {
  * @return {[Printer]} printer  [the escpos printer instance]
  */
 Printer.prototype.print = function (content) {
+  dontCheckStatus = true;
   console.log("PRINT_DEBUG", "PRINT_TO_BUFFER", content);
   this.buffer.write(content);
+  setTimeout(() => {
+    dontCheckStatus = false;
+  },50000);
+
   return this;
 };
 /**
@@ -961,47 +968,57 @@ Printer.prototype.getStatuses = function(callback) {
 }
 
 /**
+ * Return dontCheckStatus
+ * @return {dontCheckStatus}
+ */
+Printer.prototype.getCheckStatus = function () {
+  return dontCheckStatus;
+}
+
+/**
  * get custom statuses from the printer
  * @param  {Function} callback
  * @return {Printer}
  */
  Printer.prototype.getCustomStatuses = function(callback) {
-  let buffer = [];
+  if (!dontCheckStatus) {
+    let buffer = [];
+    
+    this.adapter.read(data => {
+      for (let i = 0; i < data.byteLength; i++) {
+        buffer.push(data.readInt8(i));
+      }
+
+      if (buffer.length < 2) {
+        return;
+      }
+
+      let statuses = [];
+
+      for (let i = 0; i <= buffer.length; i++) {
+        let byte = buffer[i];
+        switch (i) {
+          case 0:
+            statuses.push(new RollPaperSensorStatus(byte));
+            break;
+          case 1:
+            statuses.push(new ExternalSensorStatus(byte));
+            break;
+        }}
+
+      buffer = [];
+      callback(statuses);
+    })
+
+    RollPaperSensorStatus.commands().forEach((c) => {
+      this.adapter.write(c);
+    });
+
+    ExternalSensorStatus.commands().forEach((c) => {
+      this.adapter.write(c);
+    });
+  }
   
-  this.adapter.read(data => {
-    for (let i = 0; i < data.byteLength; i++) {
-      buffer.push(data.readInt8(i));
-    }
-
-    if (buffer.length < 2) {
-      return;
-    }
-
-    let statuses = [];
-
-    for (let i = 0; i <= buffer.length; i++) {
-      let byte = buffer[i];
-      switch (i) {
-        case 0:
-          statuses.push(new RollPaperSensorStatus(byte));
-          break;
-        case 1:
-          statuses.push(new ExternalSensorStatus(byte));
-          break;
-      }}
-
-    buffer = [];
-    callback(statuses);
-  })
-
-  RollPaperSensorStatus.commands().forEach((c) => {
-    this.adapter.write(c);
-  });
-
-  ExternalSensorStatus.commands().forEach((c) => {
-    this.adapter.write(c);
-  });
-
   return this;
 }
 
