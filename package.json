@@ -1,6 +1,6 @@
 {
   "name": "escpos-mc",
-  "version": "1.0.4-debug",
+  "version": "1.0.5",
   "description": "My temp ESC/POS Printer driver for nodejs",
   "main": "index.js",
   "scripts": {
