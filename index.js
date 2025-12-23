@@ -795,11 +795,44 @@ Printer.prototype.beep = function (n, t) {
  * @param  {Function} callback
  * @return {[Printer]} printer  [the escpos printer instance]
  */
-Printer.prototype.flush = function (callback) {
-  var buf = this.buffer.flush();
-  this.adapter.write(buf, callback);
-  return this;
-};
+  Printer.prototype.flush = function (callback) {
+    let buf;
+    try {
+      buf = this.buffer.flush();
+    } catch (e) {
+      callback && callback(e);
+      return this;
+    }
+
+    // Guard: prevent usb lib crash on undefined/empty
+    if (!buf) {
+      callback && callback(null);
+      return this;
+    }
+
+    if (Buffer.isBuffer(buf)) {
+      if (buf.length === 0) {
+        callback && callback(null);
+        return this;
+      }
+      this.adapter.write(buf, callback);
+      return this;
+    }
+
+    // normalize anything else to Buffer
+    try {
+      const b = Buffer.from(buf);
+      if (b.length === 0) {
+        callback && callback(null);
+        return this;
+      }
+      this.adapter.write(b, callback);
+    } catch (e) {
+      callback && callback(e);
+    }
+
+    return this;
+  };
 
 /**
  * [function Cut paper]
@@ -822,8 +855,13 @@ Printer.prototype.cut = function (part, feed) {
  */
 Printer.prototype.close = function (callback, options) {
   var self = this;
-  return this.flush(function () {
-    self.adapter.close(callback, options);
+  return this.flush(function (err) {
+    // čak i ako flush vrati err, pokušaj close da ne ostane zaglavljeno
+    try {
+      self.adapter.close(callback, options);
+    } catch (e) {
+      callback && callback(e);
+    }
   });
 };
 
@@ -879,30 +917,42 @@ Printer.prototype.raw = function raw(data) {
  * @return {Printer}
  */
  Printer.prototype.getStatus = function(statusClassName, callback) {
-  this.adapter.read(data => {
-    let byte;
-    try {
-      byte = data.readInt8(0);
-    } catch (error) {
-      //console.log("XSSSSS ", error)
-      this.adapter.close();
-    }
-    if (byte) {
-      const status = new statuses[statusClassName](byte);
-   
-        callback(status);
-    } else {
-      const status = null;
-      callback(status)
-    }
-  })
-  
+  // upiši komande u buffer
   statuses[statusClassName].commands().forEach((c) => {
     this.buffer.write(c);
   });
-  
+
+  // pošalji komande
+  this.flush(() => {
+    const timeoutMs = 300;
+    let done = false;
+
+    const t = setTimeout(() => {
+      if (done) return;
+      done = true;
+      callback(null);
+    }, timeoutMs);
+
+    // compat: read može biti cb(data) ili cb(err,data)
+    this.adapter.read((a, b) => {
+      let err, data;
+      if (b === undefined) { err = null; data = a; }
+      else { err = a; data = b; }
+
+      if (done) return;
+      done = true;
+      clearTimeout(t);
+
+      if (err || !data || data.length < 1) return callback(null);
+
+      const byte = data.readUInt8(0);
+      const status = new statuses[statusClassName](byte);
+      callback(status);
+    });
+  });
+
   return this;
- } 
+};
 
 /**
  * get statuses from the printer
@@ -911,64 +961,61 @@ Printer.prototype.raw = function raw(data) {
  */
 Printer.prototype.getStatuses = function(callback) {
   let buffer = [];
-  
-  this.adapter.read(data => {
+
+  const timeoutMs = 400;
+  let done = false;
+  const t = setTimeout(() => {
+    if (done) return;
+    done = true;
+    callback(null);
+  }, timeoutMs);
+
+  this.adapter.read((a, b) => {
+    let err, data;
+    if (b === undefined) { err = null; data = a; }
+    else { err = a; data = b; }
+
+    if (done) return;
+
+    if (err || !data) {
+      done = true;
+      clearTimeout(t);
+      return callback(null);
+    }
+
     for (let i = 0; i < data.byteLength; i++) {
       buffer.push(data.readInt8(i));
     }
 
-    if (buffer.length < 4) {
-      return;
-    }
+    if (buffer.length < 4) return;
 
-    let statuses = [];
-    for (let i = 0; i <= buffer.length; i++) {
+    done = true;
+    clearTimeout(t);
+
+    let out = [];
+    for (let i = 0; i < buffer.length; i++) { // < buffer.length
       let byte = buffer[i];
       switch (i) {
-        case 0:
-          statuses.push(new PrinterStatus(byte));
-          break;
-        case 1:
-          statuses.push(new RollPaperSensorStatus(byte));
-          break;
-        case 2:
-          statuses.push(new OfflineCauseStatus(byte));
-          break;
-        case 3  :
-          statuses.push(new ErrorCauseStatus(byte));
-          break;
-        case 4  :
-          statuses.push(new ExternalSensorStatus(byte));
-          break;
+        case 0: out.push(new PrinterStatus(byte)); break;
+        case 1: out.push(new RollPaperSensorStatus(byte)); break;
+        case 2: out.push(new OfflineCauseStatus(byte)); break;
+        case 3: out.push(new ErrorCauseStatus(byte)); break;
+        case 4: out.push(new ExternalSensorStatus(byte)); break;
       }
     }
 
     buffer = [];
-    callback(statuses);
-  })
-
-  PrinterStatus.commands().forEach((c) => {
-    this.adapter.write(c);
+    callback(out);
   });
 
-  RollPaperSensorStatus.commands().forEach((c) => {
-    this.adapter.write(c);
-  });
-
-  OfflineCauseStatus.commands().forEach((c) => {
-    this.adapter.write(c);
-  });
-
-  ErrorCauseStatus.commands().forEach((c) => {
-    this.adapter.write(c);
-  });
-
-  ExternalSensorStatus.commands().forEach((c) => {
-    this.adapter.write(c);
-  });
+  PrinterStatus.commands().forEach((c) => this.adapter.write(c));
+  RollPaperSensorStatus.commands().forEach((c) => this.adapter.write(c));
+  OfflineCauseStatus.commands().forEach((c) => this.adapter.write(c));
+  ErrorCauseStatus.commands().forEach((c) => this.adapter.write(c));
+  ExternalSensorStatus.commands().forEach((c) => this.adapter.write(c));
 
   return this;
-}
+};
 
 /**
  * Return dontCheckStatus
@@ -983,45 +1030,57 @@ Printer.prototype.getCheckStatus = function () {
  * @param  {Function} callback
  * @return {Printer}
  */
- Printer.prototype.getCustomStatuses = function(callback) {
-  let buffer = [];
-  
-  this.adapter.read(data => {
-    for (let i = 0; i < data.byteLength; i++) {
-      buffer.push(data.readInt8(i));
-    }
+  Printer.prototype.getCustomStatuses = function(callback) {
+    let buffer = [];
 
-    if (buffer.length < 2) {
-      return;
-    }
+    const timeoutMs = 400;
+    let done = false;
+    const t = setTimeout(() => {
+      if (done) return;
+      done = true;
+      callback(null);
+    }, timeoutMs);
 
-    let statuses = [];
+    this.adapter.read((a, b) => {
+      let err, data;
+      if (b === undefined) { err = null; data = a; }
+      else { err = a; data = b; }
 
-    for (let i = 0; i <= buffer.length; i++) {
-      let byte = buffer[i];
-      switch (i) {
-        case 0:
-          statuses.push(new RollPaperSensorStatus(byte));
-          break;
-        case 1:
-          statuses.push(new ExternalSensorStatus(byte));
-          break;
-      }}
+      if (done) return;
 
-    buffer = [];
-    callback(statuses);
-  })
+      if (err || !data) {
+        done = true;
+        clearTimeout(t);
+        return callback(null);
+      }
 
-  RollPaperSensorStatus.commands().forEach((c) => {
-    this.adapter.write(c);
-  });
+      for (let i = 0; i < data.byteLength; i++) {
+        buffer.push(data.readInt8(i));
+      }
 
-  ExternalSensorStatus.commands().forEach((c) => {
-    this.adapter.write(c);
-  });
+      if (buffer.length < 2) return;
 
-  return this;
-}
+      done = true;
+      clearTimeout(t);
+
+      let out = [];
+      for (let i = 0; i < buffer.length; i++) { // ✅ < buffer.length
+        let byte = buffer[i];
+        switch (i) {
+          case 0: out.push(new RollPaperSensorStatus(byte)); break;
+          case 1: out.push(new ExternalSensorStatus(byte)); break;
+        }
+      }
+
+      buffer = [];
+      callback(out);
+    });
+
+    RollPaperSensorStatus.commands().forEach((c) => this.adapter.write(c));
+    ExternalSensorStatus.commands().forEach((c) => this.adapter.write(c));
+
+    return this;
+  };
 
 /**
  * Printer Supports
