@@ -825,9 +825,9 @@ Printer.prototype.beep = function (n, t) {
       this.adapter.write(buf, (err) => {
         // ako smo poslali buffer, možemo ranije da otpustimo status lock
         // (ali ne odmah — ostavi malo prostora da printer obradi)
-        setTimeout(() => {
+        if (this._dontCheckTimeout) clearTimeout(this._dontCheckTimeout);
+        this._dontCheckTimeout = setTimeout(() => {
           this._dontCheckStatus = false;
-          if (this._dontCheckTimeout) clearTimeout(this._dontCheckTimeout);
           this._dontCheckTimeout = null;
         }, 1500);
       
@@ -844,12 +844,12 @@ Printer.prototype.beep = function (n, t) {
         callback && callback(null);
         return this;
       }
-      this.adapter.write(buf, (err) => {
+      this.adapter.write(b, (err) => {
         // ako smo poslali buffer, možemo ranije da otpustimo status lock
         // (ali ne odmah — ostavi malo prostora da printer obradi)
-        setTimeout(() => {
+        if (this._dontCheckTimeout) clearTimeout(this._dontCheckTimeout);
+        this._dontCheckTimeout = setTimeout(() => {
           this._dontCheckStatus = false;
-          if (this._dontCheckTimeout) clearTimeout(this._dontCheckTimeout);
           this._dontCheckTimeout = null;
         }, 1500);
       
