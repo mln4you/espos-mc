@@ -12,8 +12,6 @@ const Promiseify = require('./promisify');
 const statuses = require('./statuses');
 const {PrinterStatus,OfflineCauseStatus,ErrorCauseStatus,RollPaperSensorStatus, ExternalSensorStatus} = statuses;
 
-var dontCheckStatus = false;
-var dontCheckTimeout;
 
 /**
  * [function ESC/POS Printer]
@@ -32,6 +30,8 @@ function Printer(adapter, options) {
   this.encoding = options && options.encoding || 'GB18030';
   this.width = options && options.width || 48;
   this._model = null;
+  this._dontCheckStatus = false;
+  this._dontCheckTimeout = null;
 };
 
 Printer.create = function (device) {
@@ -110,14 +110,21 @@ Printer.prototype.marginRight = function (size) {
  * @return {[Printer]} printer  [the escpos printer instance]
  */
 Printer.prototype.print = function (content) {
-  clearTimeout(dontCheckTimeout);
-  dontCheckStatus = true;
+  // dok štampa, nemoj status polling (osim direct poziva)
+  if (this._dontCheckTimeout) clearTimeout(this._dontCheckTimeout);
+  this._dontCheckStatus = true;
+
+  // DEBUG (ostavi ako želiš)
   console.log("PRINT_DEBUG", "PRINT_TO_BUFFER", content);
+
   this.buffer.write(content);
-  dontCheckTimeout = setTimeout(() => {
-    dontCheckStatus = false;
-    clearTimeout(dontCheckTimeout);
-  },50000);
+
+  // fallback: ako se iz nekog razloga close/flush ne desi, otpusti lock posle max vremena
+  this._dontCheckTimeout = setTimeout(() => {
+    this._dontCheckStatus = false;
+    if (this._dontCheckTimeout) clearTimeout(this._dontCheckTimeout);
+    this._dontCheckTimeout = null;
+  }, 50000);
 
   return this;
 };
@@ -815,8 +822,19 @@ Printer.prototype.beep = function (n, t) {
         callback && callback(null);
         return this;
       }
-      this.adapter.write(buf, callback);
+      this.adapter.write(buf, (err) => {
+        // ako smo poslali buffer, možemo ranije da otpustimo status lock
+        // (ali ne odmah — ostavi malo prostora da printer obradi)
+        setTimeout(() => {
+          this._dontCheckStatus = false;
+          if (this._dontCheckTimeout) clearTimeout(this._dontCheckTimeout);
+          this._dontCheckTimeout = null;
+        }, 1500);
+      
+        callback && callback(err || null);
+      });
       return this;
+      
     }
 
     // normalize anything else to Buffer
@@ -826,7 +844,17 @@ Printer.prototype.beep = function (n, t) {
         callback && callback(null);
         return this;
       }
-      this.adapter.write(b, callback);
+      this.adapter.write(buf, (err) => {
+        // ako smo poslali buffer, možemo ranije da otpustimo status lock
+        // (ali ne odmah — ostavi malo prostora da printer obradi)
+        setTimeout(() => {
+          this._dontCheckStatus = false;
+          if (this._dontCheckTimeout) clearTimeout(this._dontCheckTimeout);
+          this._dontCheckTimeout = null;
+        }, 1500);
+      
+        callback && callback(err || null);
+      });
     } catch (e) {
       callback && callback(e);
     }
@@ -916,7 +944,7 @@ Printer.prototype.raw = function raw(data) {
  * @param  {Function} callback
  * @return {Printer}
  */
- Printer.prototype.getStatus = function(statusClassName, callback) {
+ Printer.prototype.getStatus = function (statusClassName, callback) {
   // upiši komande u buffer
   statuses[statusClassName].commands().forEach((c) => {
     this.buffer.write(c);
@@ -924,7 +952,7 @@ Printer.prototype.raw = function raw(data) {
 
   // pošalji komande
   this.flush(() => {
-    const timeoutMs = 300;
+    const timeoutMs = 400;
     let done = false;
 
     const t = setTimeout(() => {
@@ -933,7 +961,6 @@ Printer.prototype.raw = function raw(data) {
       callback(null);
     }, timeoutMs);
 
-    // compat: read može biti cb(data) ili cb(err,data)
     this.adapter.read((a, b) => {
       let err, data;
       if (b === undefined) { err = null; data = a; }
@@ -943,7 +970,7 @@ Printer.prototype.raw = function raw(data) {
       done = true;
       clearTimeout(t);
 
-      if (err || !data || data.length < 1) return callback(null);
+      if (err || !data || !Buffer.isBuffer(data) || data.length < 1) return callback(null);
 
       const byte = data.readUInt8(0);
       const status = new statuses[statusClassName](byte);
@@ -959,10 +986,10 @@ Printer.prototype.raw = function raw(data) {
  * @param  {Function} callback
  * @return {Printer}
  */
-Printer.prototype.getStatuses = function(callback) {
+Printer.prototype.getStatuses = function (callback) {
   let buffer = [];
 
-  const timeoutMs = 400;
+  const timeoutMs = 600;
   let done = false;
   const t = setTimeout(() => {
     if (done) return;
@@ -970,14 +997,14 @@ Printer.prototype.getStatuses = function(callback) {
     callback(null);
   }, timeoutMs);
 
-  this.adapter.read((a, b) => {
+  const onRead = (a, b) => {
     let err, data;
     if (b === undefined) { err = null; data = a; }
     else { err = a; data = b; }
 
     if (done) return;
 
-    if (err || !data) {
+    if (err || !data || !Buffer.isBuffer(data)) {
       done = true;
       clearTimeout(t);
       return callback(null);
@@ -987,26 +1014,33 @@ Printer.prototype.getStatuses = function(callback) {
       buffer.push(data.readInt8(i));
     }
 
-    if (buffer.length < 4) return;
+    // očekujemo bar 4 bajta (PrinterStatus/RollPaper/OfflineCause/ErrorCause)
+    if (buffer.length < 4) {
+      // nastavi da čitaš dok ne skupiš dovoljno
+      return this.adapter.read(onRead);
+    }
 
     done = true;
     clearTimeout(t);
 
-    let out = [];
-    for (let i = 0; i < buffer.length; i++) { // < buffer.length
-      let byte = buffer[i];
+    const out = [];
+    for (let i = 0; i < buffer.length; i++) {
+      const byte = buffer[i];
       switch (i) {
         case 0: out.push(new PrinterStatus(byte)); break;
         case 1: out.push(new RollPaperSensorStatus(byte)); break;
         case 2: out.push(new OfflineCauseStatus(byte)); break;
         case 3: out.push(new ErrorCauseStatus(byte)); break;
         case 4: out.push(new ExternalSensorStatus(byte)); break;
+        default: break;
       }
     }
 
     buffer = [];
     callback(out);
-  });
+  };
+
+  this.adapter.read(onRead);
 
   PrinterStatus.commands().forEach((c) => this.adapter.write(c));
   RollPaperSensorStatus.commands().forEach((c) => this.adapter.write(c));
@@ -1022,65 +1056,84 @@ Printer.prototype.getStatuses = function(callback) {
  * @return {dontCheckStatus}
  */
 Printer.prototype.getCheckStatus = function () {
-  return dontCheckStatus;
-}
+  return !!this._dontCheckStatus;
+};
 
 /**
  * get custom statuses from the printer
  * @param  {Function} callback
  * @return {Printer}
  */
-  Printer.prototype.getCustomStatuses = function(callback) {
-    let buffer = [];
+Printer.prototype.getCustomStatuses = function (callback) {
+  const self = this;
 
-    const timeoutMs = 400;
-    let done = false;
-    const t = setTimeout(() => {
-      if (done) return;
-      done = true;
-      callback(null);
-    }, timeoutMs);
+  let buffer = [];
+  let done = false;
 
-    this.adapter.read((a, b) => {
-      let err, data;
-      if (b === undefined) { err = null; data = a; }
-      else { err = a; data = b; }
+  // U praksi VM ume da kasni — ali ti u roll-paper-status već radiš Promise.race timeout,
+  // pa ovde možemo malo više (da bi imalo šanse da dođe)
+  const timeoutMs = 3000;
 
-      if (done) return;
+  const t = setTimeout(() => {
+    if (done) return;
+    done = true;
+    callback(null);
+  }, timeoutMs);
 
-      if (err || !data) {
-        done = true;
-        clearTimeout(t);
-        return callback(null);
-      }
+  function finish(out) {
+    if (done) return;
+    done = true;
+    clearTimeout(t);
+    callback(out);
+  }
 
-      for (let i = 0; i < data.byteLength; i++) {
-        buffer.push(data.readInt8(i));
-      }
+  function onRead(a, b) {
+    let err, data;
+    if (b === undefined) { err = null; data = a; }
+    else { err = a; data = b; }
 
-      if (buffer.length < 2) return;
+    if (done) return;
 
-      done = true;
-      clearTimeout(t);
+    if (err || !data || !Buffer.isBuffer(data) || data.length < 1) {
+      return finish(null);
+    }
 
-      let out = [];
-      for (let i = 0; i < buffer.length; i++) { // ✅ < buffer.length
-        let byte = buffer[i];
+    for (let i = 0; i < data.byteLength; i++) {
+      buffer.push(data.readInt8(i));
+    }
+
+    // očekujemo 2 bajta: RollPaperSensor + ExternalSensor (tvoj custom)
+    if (buffer.length >= 2) {
+      const out = [];
+      for (let i = 0; i < buffer.length; i++) {
+        const byte = buffer[i];
         switch (i) {
           case 0: out.push(new RollPaperSensorStatus(byte)); break;
           case 1: out.push(new ExternalSensorStatus(byte)); break;
+          default: break;
         }
       }
+      return finish(out);
+    }
 
-      buffer = [];
-      callback(out);
-    });
+    // nastavi da čitaš dok ne dobiješ oba bajta
+    self.adapter.read(onRead);
+  }
 
-    RollPaperSensorStatus.commands().forEach((c) => this.adapter.write(c));
-    ExternalSensorStatus.commands().forEach((c) => this.adapter.write(c));
+  // start listening first, then send commands
+  self.adapter.read(onRead);
 
-    return this;
-  };
+  // send roll paper command first
+  RollPaperSensorStatus.commands().forEach((c) => self.adapter.write(c));
+
+  // mali delay pa external
+  setTimeout(() => {
+    if (done) return;
+    ExternalSensorStatus.commands().forEach((c) => self.adapter.write(c));
+  }, 80);
+
+  return this;
+};
 
 /**
  * Printer Supports
